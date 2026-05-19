@@ -37,7 +37,8 @@ def get_args():
     parser = argparse.ArgumentParser(description='Predict masks from input images')
     parser.add_argument('--model', '-m', default='MODEL.pth', metavar='FILE',
                         help='Specify the file in which the model is stored')
-    parser.add_argument('--input', '-i', metavar='INPUT', nargs='+', help='Filenames of input images', required=True)
+    parser.add_argument('--input', '-i', metavar='INPUT', nargs='+', required=True,
+                        help='File(s) or directory(ies) of input images')
     parser.add_argument('--output', '-o', metavar='OUTPUT', nargs='+', help='Filenames of output images')
     parser.add_argument('--viz', '-v', action='store_true',
                         help='Visualize the images as they are processed')
@@ -52,11 +53,35 @@ def get_args():
     return parser.parse_args()
 
 
-def get_output_filenames(args):
+def collect_input_files(args):
+    exts = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff')
+    files = []
+    for path in args.input:
+        if os.path.isdir(path):
+            for name in sorted(os.listdir(path)):
+                if name.lower().endswith(exts):
+                    files.append(os.path.join(path, name))
+        else:
+            files.append(path)
+    if not files:
+        raise ValueError('No input images found. Use --input with file(s) or directory(ies).')
+    return files
+
+
+def get_output_filenames(args, in_files):
     def _generate_name(fn):
         return f'{os.path.splitext(fn)[0]}_OUT.png'
 
-    return args.output or list(map(_generate_name, args.input))
+    if not args.output:
+        return list(map(_generate_name, in_files))
+
+    if len(args.output) == 1:
+        output_path = args.output[0]
+        if output_path.endswith(os.sep) or os.path.isdir(output_path):
+            os.makedirs(output_path, exist_ok=True)
+            return [os.path.join(output_path, os.path.basename(_generate_name(fn))) for fn in in_files]
+
+    return args.output
 
 
 def mask_to_image(mask: np.ndarray, mask_values):
@@ -80,10 +105,10 @@ if __name__ == '__main__':
     args = get_args()
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
-    in_files = args.input
-    out_files = get_output_filenames(args)
+    in_files = collect_input_files(args)
+    out_files = get_output_filenames(args, in_files)
 
-    net = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
+    net = UNet(n_channels=1, n_classes=args.classes, bilinear=args.bilinear)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Loading model {args.model}')

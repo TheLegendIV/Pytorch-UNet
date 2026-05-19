@@ -3,6 +3,8 @@ import logging
 import os
 import random
 import sys
+from typing import List, Optional, Union
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -19,8 +21,10 @@ from unet import UNet
 from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
 
-dir_img = Path('./data/imgs/')
-dir_mask = Path('./data/masks/')
+dir_img = Path('./arcade/imgs/train/')
+dir_val = Path('./arcade/imgs/val/')
+dir_train_mask = Path('./arcade/masks/train/')
+dir_val_mask = Path('./arcade/masks/val/')
 dir_checkpoint = Path('./checkpoints/')
 
 
@@ -30,35 +34,43 @@ def train_model(
         epochs: int = 5,
         batch_size: int = 1,
         learning_rate: float = 1e-5,
-        val_percent: float = 0.1,
         save_checkpoint: bool = True,
         img_scale: float = 0.5,
         amp: bool = False,
         weight_decay: float = 1e-8,
         momentum: float = 0.999,
         gradient_clipping: float = 1.0,
+        class_weights: Optional[Union[str, List[float]]] = None,
 ):
-    # 1. Create dataset
+    # 1. Create dataset (fallback to BasicDataset if Carvana naming does not match)
     try:
-        dataset = CarvanaDataset(dir_img, dir_mask, img_scale)
+        dataset = CarvanaDataset(dir_img, dir_train_mask, img_scale)
     except (AssertionError, RuntimeError, IndexError):
-        dataset = BasicDataset(dir_img, dir_mask, img_scale)
+        dataset = BasicDataset(dir_img, dir_train_mask, img_scale)
 
-    # 2. Split into train / validation partitions
-    n_val = int(len(dataset) * val_percent)
-    n_train = len(dataset) - n_val
-    train_set, val_set = random_split(dataset, [n_train, n_val], generator=torch.Generator().manual_seed(0))
+    # 2. Load a fixed validation set
+    val_set = BasicDataset(dir_val, dir_val_mask, img_scale)
+    train_set = dataset
+    n_train = len(train_set)
+    n_val = len(val_set)
+
+    # 2b. Resolve class weights once per run
+    resolved_class_weights = resolve_class_weights(class_weights, train_set, model.n_classes, device)
 
     # 3. Create data loaders
+    # DataLoader settings tuned for GPU training
     loader_args = dict(batch_size=batch_size, num_workers=os.cpu_count(), pin_memory=True)
+
     train_loader = DataLoader(train_set, shuffle=True, **loader_args)
     val_loader = DataLoader(val_set, shuffle=False, drop_last=True, **loader_args)
 
     # (Initialize logging)
+    # W&B can be disabled via WANDB_DISABLED=true
     experiment = wandb.init(project='U-Net', resume='allow', anonymous='must')
     experiment.config.update(
-        dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate,
-             val_percent=val_percent, save_checkpoint=save_checkpoint, img_scale=img_scale, amp=amp)
+           dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate,
+               save_checkpoint=save_checkpoint, img_scale=img_scale, amp=amp,
+               class_weights=class_weights)
     )
 
     logging.info(f'''Starting training:
@@ -73,12 +85,24 @@ def train_model(
         Mixed Precision: {amp}
     ''')
 
-    # 4. Set up the optimizer, the loss, the learning rate scheduler and the loss scaling for AMP
+    # 4. Set up the optimizer, loss, LR scheduler, and AMP scaler
     optimizer = optim.RMSprop(model.parameters(),
                               lr=learning_rate, weight_decay=weight_decay, momentum=momentum, foreach=True)
+    # Reduce LR when validation Dice plateaus
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=5)  # goal: maximize Dice score
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
-    criterion = nn.CrossEntropyLoss() if model.n_classes > 1 else nn.BCEWithLogitsLoss()
+    # Use Dice + weighted CE/BCE for more stable optimization
+    if model.n_classes == 1:
+        pos_weight = None
+        if resolved_class_weights is not None:
+            if resolved_class_weights.numel() != 2:
+                raise ValueError('Binary segmentation expects 2 class weights: background,foreground')
+            pos_weight = (resolved_class_weights[1] / resolved_class_weights[0]).to(device)
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    else:
+        if resolved_class_weights is not None and resolved_class_weights.numel() != model.n_classes:
+            raise ValueError(f'Expected {model.n_classes} class weights, got {resolved_class_weights.numel()}')
+        criterion = nn.CrossEntropyLoss(weight=resolved_class_weights)
     global_step = 0
 
     # 5. Begin training
@@ -97,21 +121,26 @@ def train_model(
                 images = images.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
                 true_masks = true_masks.to(device=device, dtype=torch.long)
 
+                # Forward pass in mixed precision if enabled
                 with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
                     masks_pred = model(images)
                     if model.n_classes == 1:
-                        loss = criterion(masks_pred.squeeze(1), true_masks.float())
-                        loss += dice_loss(F.sigmoid(masks_pred.squeeze(1)), true_masks.float(), multiclass=False)
+                        # Binary segmentation: BCE + Dice over the single channel
+                        loss = criterion(masks_pred.squeeze(1), true_masks.float()) + dice_loss(
+                            F.sigmoid(masks_pred.squeeze(1)), true_masks.float(), multiclass=False
+                        )
                     else:
-                        loss = criterion(masks_pred, true_masks)
-                        loss += dice_loss(
+                        # Multiclass segmentation: CE + Dice over one-hot masks
+                        loss = criterion(masks_pred, true_masks) + dice_loss(
                             F.softmax(masks_pred, dim=1).float(),
                             F.one_hot(true_masks, model.n_classes).permute(0, 3, 1, 2).float(),
                             multiclass=True
                         )
 
+                # Backprop with optional gradient scaling for AMP
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
+                # Unscale before clipping so thresholds apply to true gradients
                 grad_scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clipping)
                 grad_scaler.step(optimizer)
@@ -128,6 +157,7 @@ def train_model(
                 pbar.set_postfix(**{'loss (batch)': loss.item()})
 
                 # Evaluation round
+                # Validate a few times per epoch for faster feedback
                 division_step = (n_train // (5 * batch_size))
                 if division_step > 0:
                     if global_step % division_step == 0:
@@ -159,6 +189,7 @@ def train_model(
                         except:
                             pass
 
+        # Save a checkpoint per epoch for resuming or inference
         if save_checkpoint:
             Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
             state_dict = model.state_dict()
@@ -175,13 +206,59 @@ def get_args():
                         help='Learning rate', dest='lr')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
     parser.add_argument('--scale', '-s', type=float, default=0.5, help='Downscaling factor of the images')
-    parser.add_argument('--validation', '-v', dest='val', type=float, default=10.0,
-                        help='Percent of the data that is used as validation (0-100)')
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
+    parser.add_argument('--class-weights', type=parse_class_weights_arg, default=None,
+                        help='Comma-separated weights per class or "auto"')
 
     return parser.parse_args()
+
+
+def parse_class_weights_arg(value: str) -> Union[str, List[float]]:
+    value = value.strip()
+    if value.lower() == 'auto':
+        return 'auto'
+    try:
+        return [float(v) for v in value.split(',')]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            'Class weights must be "auto" or comma-separated numbers, e.g. "1,2,3".'
+        ) from exc
+
+
+def resolve_class_weights(
+        class_weights: Optional[Union[str, List[float]]],
+        train_set,
+        n_classes: int,
+        device: torch.device,
+) -> Optional[torch.Tensor]:
+    if class_weights is None:
+        return None
+
+    weight_classes = 2 if n_classes == 1 else n_classes
+    if class_weights == 'auto':
+        weights = compute_class_weights(train_set, weight_classes)
+    else:
+        weights = torch.tensor(class_weights, dtype=torch.float32)
+        if weights.numel() != weight_classes:
+            raise ValueError(f'Expected {weight_classes} class weights, got {weights.numel()}')
+
+    logging.info('Class weights: %s', weights.tolist())
+    return weights.to(device)
+
+
+def compute_class_weights(train_set, n_classes: int) -> torch.Tensor:
+    # Use a single-threaded loader to avoid overhead during weighting
+    weight_loader = DataLoader(train_set, batch_size=1, shuffle=False, num_workers=0)
+    counts = torch.zeros(n_classes, dtype=torch.float64)
+    for batch in tqdm(weight_loader, desc='Computing class weights', unit='img'):
+        mask = batch['mask'].view(-1)
+        counts += torch.bincount(mask, minlength=n_classes).double()
+
+    counts = torch.clamp(counts, min=1.0)
+    weights = counts.sum() / (n_classes * counts)
+    return weights.float()
 
 
 if __name__ == '__main__':
@@ -194,7 +271,7 @@ if __name__ == '__main__':
     # Change here to adapt to your data
     # n_channels=3 for RGB images
     # n_classes is the number of probabilities you want to get per pixel
-    model = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
+    model = UNet(n_channels=1, n_classes=args.classes, bilinear=args.bilinear)
     model = model.to(memory_format=torch.channels_last)
 
     logging.info(f'Network:\n'
@@ -217,8 +294,8 @@ if __name__ == '__main__':
             learning_rate=args.lr,
             device=device,
             img_scale=args.scale,
-            val_percent=args.val / 100,
-            amp=args.amp
+            amp=args.amp,
+            class_weights=args.class_weights
         )
     except torch.cuda.OutOfMemoryError:
         logging.error('Detected OutOfMemoryError! '
@@ -233,6 +310,6 @@ if __name__ == '__main__':
             learning_rate=args.lr,
             device=device,
             img_scale=args.scale,
-            val_percent=args.val / 100,
-            amp=args.amp
+            amp=args.amp,
+            class_weights=args.class_weights
         )

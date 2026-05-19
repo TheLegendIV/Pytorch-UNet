@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 
 def load_image(filename):
+    # Load common formats as PIL images for unified preprocessing
     ext = splitext(filename)[1]
     if ext == '.npy':
         return Image.fromarray(np.load(filename))
@@ -24,6 +25,7 @@ def load_image(filename):
 
 
 def unique_mask_values(idx, mask_dir, mask_suffix):
+    # Scan unique values to build a consistent label mapping
     mask_file = list(mask_dir.glob(idx + mask_suffix + '.*'))[0]
     mask = np.asarray(load_image(mask_file))
     if mask.ndim == 2:
@@ -63,6 +65,7 @@ class BasicDataset(Dataset):
 
     @staticmethod
     def preprocess(mask_values, pil_img, scale, is_mask):
+        # Resize and normalize input images; map mask pixels to class indices
         w, h = pil_img.size
         newW, newH = int(scale * w), int(scale * h)
         assert newW > 0 and newH > 0, 'Scale is too small, resized images would have no pixel'
@@ -91,6 +94,7 @@ class BasicDataset(Dataset):
             return img
 
     def __getitem__(self, idx):
+        # Match image/mask pairs by filename stem
         name = self.ids[idx]
         mask_file = list(self.mask_dir.glob(name + self.mask_suffix + '.*'))
         img_file = list(self.images_dir.glob(name + '.*'))

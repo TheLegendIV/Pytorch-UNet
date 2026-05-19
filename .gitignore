@@ -7,3 +7,6 @@ checkpoints/
 venv/
 .idea/
 wandb/
+arcade/*.png
+arcade/*.jpg
+*zip

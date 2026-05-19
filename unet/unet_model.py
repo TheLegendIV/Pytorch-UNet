@@ -10,19 +10,23 @@ class UNet(nn.Module):
         self.n_classes = n_classes
         self.bilinear = bilinear
 
+        # Encoder: downsample while increasing feature depth
         self.inc = (DoubleConv(n_channels, 64))
         self.down1 = (Down(64, 128))
         self.down2 = (Down(128, 256))
         self.down3 = (Down(256, 512))
         factor = 2 if bilinear else 1
         self.down4 = (Down(512, 1024 // factor))
+        # Decoder: upsample with skip connections
         self.up1 = (Up(1024, 512 // factor, bilinear))
         self.up2 = (Up(512, 256 // factor, bilinear))
         self.up3 = (Up(256, 128 // factor, bilinear))
         self.up4 = (Up(128, 64, bilinear))
+        # Final 1x1 conv produces per-class logits
         self.outc = (OutConv(64, n_classes))
 
     def forward(self, x):
+        # Save encoder activations for skip connections
         x1 = self.inc(x)
         x2 = self.down1(x1)
         x3 = self.down2(x2)
@@ -36,6 +40,7 @@ class UNet(nn.Module):
         return logits
 
     def use_checkpointing(self):
+        # Trade compute for memory by re-running forward during backprop
         self.inc = torch.utils.checkpoint(self.inc)
         self.down1 = torch.utils.checkpoint(self.down1)
         self.down2 = torch.utils.checkpoint(self.down2)
