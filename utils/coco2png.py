@@ -1,7 +1,7 @@
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -32,6 +32,36 @@ def polygon_to_mask(polygons: List[List[float]], width: int, height: int, fill_v
         points = [(poly[i], poly[i + 1]) for i in range(0, len(poly), 2)]
         draw.polygon(points, fill=fill_value)
     return np.array(mask_img, dtype=np.uint8)
+
+
+DEFAULT_PALETTE: Dict[int, Tuple[int, int, int]] = {
+    0: (0, 0, 0),
+    1: (255, 0, 0),
+    2: (0, 255, 0),
+    3: (0, 0, 255),
+    4: (255, 255, 0),
+    5: (255, 0, 255),
+    6: (0, 255, 255),
+}
+
+
+def build_palette(max_id: int) -> Dict[int, Tuple[int, int, int]]:
+    palette = dict(DEFAULT_PALETTE)
+    for idx in range(max_id + 1):
+        if idx in palette:
+            continue
+        # Deterministic color for unseen ids
+        palette[idx] = ((idx * 37) % 256, (idx * 67) % 256, (idx * 97) % 256)
+    return palette
+
+
+def colorize_mask(mask: np.ndarray, palette: Dict[int, Tuple[int, int, int]]) -> np.ndarray:
+    h, w = mask.shape
+    rgb = np.zeros((h, w, 3), dtype=np.uint8)
+    for value in np.unique(mask):
+        color = palette.get(int(value), (255, 255, 255))
+        rgb[mask == value] = color
+    return rgb
 
 
 def parse_groups(groups_text: Optional[str]) -> Dict[int, int]:
@@ -87,7 +117,12 @@ def write_masks(
                 mask = np.maximum(mask, mask_part)
 
         out_path = masks_dir / Path(file_name).with_suffix(".png").name
-        Image.fromarray(mask).save(out_path)
+        if binary:
+            Image.fromarray(mask).save(out_path)
+        else:
+            palette = build_palette(int(mask.max()))
+            colored = colorize_mask(mask, palette)
+            Image.fromarray(colored).save(out_path)
 
 
 def parse_args() -> argparse.Namespace:

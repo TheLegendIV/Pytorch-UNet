@@ -3,10 +3,11 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from utils.dice_score import multiclass_dice_coeff, dice_coeff
+from hyperparameters import DEFAULT_AMP
 
 
 @torch.inference_mode()
-def evaluate(net, dataloader, device, amp):
+def evaluate(net, dataloader, device, amp: bool = DEFAULT_AMP):
     net.eval()
     num_val_batches = len(dataloader)
     dice_score = 0

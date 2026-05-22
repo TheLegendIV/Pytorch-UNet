@@ -18,8 +18,20 @@ from tqdm import tqdm
 import wandb
 from evaluate import evaluate
 from unet import UNet
-from utils.data_loading import BasicDataset, CarvanaDataset
+from utils.data_loading import BasicDataset
 from utils.dice_score import dice_loss
+from hyperparameters import (
+    DEFAULT_AMP,
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_BILINEAR,
+    DEFAULT_CLASS_WEIGHTS,
+    DEFAULT_CLASSES,
+    DEFAULT_EPOCHS,
+    DEFAULT_LEARNING_RATE,
+    DEFAULT_LOAD,
+    DEFAULT_SCALE,
+    DEFAULT_SAVE_CHECKPOINT,
+)
 
 dir_img = Path('./arcade/imgs/train/')
 dir_val = Path('./arcade/imgs/val/')
@@ -34,7 +46,7 @@ def train_model(
         epochs: int = 5,
         batch_size: int = 1,
         learning_rate: float = 1e-5,
-        save_checkpoint: bool = True,
+        save_checkpoint: bool = DEFAULT_SAVE_CHECKPOINT,
         img_scale: float = 0.5,
         amp: bool = False,
         weight_decay: float = 1e-8,
@@ -43,14 +55,13 @@ def train_model(
         class_weights: Optional[Union[str, List[float]]] = None,
 ):
     # 1. Create dataset (fallback to BasicDataset if Carvana naming does not match)
-    try:
-        dataset = CarvanaDataset(dir_img, dir_train_mask, img_scale)
-    except (AssertionError, RuntimeError, IndexError):
-        dataset = BasicDataset(dir_img, dir_train_mask, img_scale)
+    dataset = BasicDataset(dir_img, dir_train_mask, img_scale)
 
     # 2. Load a fixed validation set
-    val_set = BasicDataset(dir_val, dir_val_mask, img_scale)
     train_set = dataset
+    val_set = train_set
+    # BasicDataset(dir_val, dir_val_mask, img_scale)
+
     n_train = len(train_set)
     n_val = len(val_set)
 
@@ -89,7 +100,7 @@ def train_model(
     optimizer = optim.RMSprop(model.parameters(),
                               lr=learning_rate, weight_decay=weight_decay, momentum=momentum, foreach=True)
     # Reduce LR when validation Dice plateaus
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=5)  # goal: maximize Dice score
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=999999)  # goal: maximize Dice score
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
     # Use Dice + weighted CE/BCE for more stable optimization
     if model.n_classes == 1:
@@ -197,19 +208,18 @@ def train_model(
             torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
             logging.info(f'Checkpoint {epoch} saved!')
 
-
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
-    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=5, help='Number of epochs')
-    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=1, help='Batch size')
-    parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
+    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=DEFAULT_EPOCHS, help='Number of epochs')
+    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=DEFAULT_BATCH_SIZE, help='Batch size')
+    parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=DEFAULT_LEARNING_RATE,
                         help='Learning rate', dest='lr')
-    parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
-    parser.add_argument('--scale', '-s', type=float, default=0.5, help='Downscaling factor of the images')
-    parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
-    parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
-    parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
-    parser.add_argument('--class-weights', type=parse_class_weights_arg, default=None,
+    parser.add_argument('--load', '-f', type=str, default=DEFAULT_LOAD, help='Load model from a .pth file')
+    parser.add_argument('--scale', '-s', type=float, default=DEFAULT_SCALE, help='Downscaling factor of the images')
+    parser.add_argument('--amp', action='store_true', default=DEFAULT_AMP, help='Use mixed precision')
+    parser.add_argument('--bilinear', action='store_true', default=DEFAULT_BILINEAR, help='Use bilinear upsampling')
+    parser.add_argument('--classes', '-c', type=int, default=DEFAULT_CLASSES, help='Number of classes')
+    parser.add_argument('--class-weights', type=parse_class_weights_arg, default=DEFAULT_CLASS_WEIGHTS,
                         help='Comma-separated weights per class or "auto"')
 
     return parser.parse_args()

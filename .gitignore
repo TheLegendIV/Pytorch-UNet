@@ -10,3 +10,4 @@ wandb/
 arcade/*.png
 arcade/*.jpg
 *zip
+.venv/
