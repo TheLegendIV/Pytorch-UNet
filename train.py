@@ -97,10 +97,9 @@ def train_model(
     ''')
 
     # 4. Set up the optimizer, loss, LR scheduler, and AMP scaler
-    optimizer = optim.RMSprop(model.parameters(),
-                              lr=learning_rate, weight_decay=0, momentum=momentum, foreach=True)
-    # Reduce LR when validation Dice plateaus
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=999999)  # goal: maximize Dice score
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    # Cosine anneal from lr down to lr/100 over all epochs
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=learning_rate / 100)
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
     # Use Dice + weighted CE/BCE for more stable optimization
     if model.n_classes == 1:
@@ -141,9 +140,8 @@ def train_model(
                             F.sigmoid(masks_pred.squeeze(1)), true_masks.float(), multiclass=False
                         )
                     else:
-                        # Multiclass segmentation: CE + Dice over one-hot masks
-                        # Exclude background (class 0) from Dice — matches evaluate.py
-                        loss = criterion(masks_pred, true_masks) + dice_loss(
+                        # Multiclass: pure foreground Dice only — no CE background floor
+                        loss = dice_loss(
                             F.softmax(masks_pred, dim=1).float()[:, 1:],
                             F.one_hot(true_masks, model.n_classes).permute(0, 3, 1, 2).float()[:, 1:],
                             multiclass=True
@@ -203,7 +201,7 @@ def train_model(
                             pass
         
         val_score = evaluate(model, val_loader, device, amp)
-        scheduler.step(val_score)
+        scheduler.step()
         logging.info('Validation Dice score: {}'.format(val_score))
         
         # Save a checkpoint per epoch for resuming or inference
