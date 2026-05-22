@@ -98,7 +98,7 @@ def train_model(
 
     # 4. Set up the optimizer, loss, LR scheduler, and AMP scaler
     optimizer = optim.RMSprop(model.parameters(),
-                              lr=learning_rate, weight_decay=weight_decay, momentum=momentum, foreach=True)
+                              lr=learning_rate, weight_decay=0, momentum=momentum, foreach=True)
     # Reduce LR when validation Dice plateaus
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=999999)  # goal: maximize Dice score
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
@@ -142,9 +142,10 @@ def train_model(
                         )
                     else:
                         # Multiclass segmentation: CE + Dice over one-hot masks
+                        # Exclude background (class 0) from Dice — matches evaluate.py
                         loss = criterion(masks_pred, true_masks) + dice_loss(
-                            F.softmax(masks_pred, dim=1).float(),
-                            F.one_hot(true_masks, model.n_classes).permute(0, 3, 1, 2).float(),
+                            F.softmax(masks_pred, dim=1).float()[:, 1:],
+                            F.one_hot(true_masks, model.n_classes).permute(0, 3, 1, 2).float()[:, 1:],
                             multiclass=True
                         )
 
@@ -169,8 +170,9 @@ def train_model(
 
                 # Evaluation round
                 # Validate a few times per epoch for faster feedback
-                division_step = (n_train // (5 * batch_size))
-                if division_step > 0:
+                # max(..., 1) prevents division_step=0 when batch_size >= n_train//5
+                division_step = max(n_train // (5 * batch_size), 1)
+                if True:
                     if global_step % division_step == 0:
                         histograms = {}
                         for tag, value in model.named_parameters():
