@@ -169,6 +169,7 @@ def train_model(
 
                 # Evaluation round
                 # Validate a few times per epoch for faster feedback
+                # division_step = (n_train // (5 * batch_size))
                 division_step = (n_train // (5 * batch_size))
                 if division_step > 0:
                     if global_step % division_step == 0:
@@ -199,7 +200,11 @@ def train_model(
                             })
                         except:
                             pass
-
+        
+        val_score = evaluate(model, val_loader, device, amp)
+        scheduler.step(val_score)
+        logging.info('Validation Dice score: {}'.format(val_score))
+        
         # Save a checkpoint per epoch for resuming or inference
         if save_checkpoint:
             Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
@@ -207,6 +212,16 @@ def train_model(
             state_dict['mask_values'] = dataset.mask_values
             torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
             logging.info(f'Checkpoint {epoch} saved!')
+        elif epoch == epochs:
+            logging.info('Final epoch reached, saving final model...')
+            Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
+            state_dict = model.state_dict()
+            state_dict['mask_values'] = dataset.mask_values
+            torch.save(state_dict, str(dir_checkpoint / 'final_model.pth'))
+            logging.info('Final model saved!')
+            
+        
+        
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
