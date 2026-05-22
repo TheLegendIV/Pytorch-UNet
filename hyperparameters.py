@@ -9,7 +9,7 @@ DEFAULT_CLASSES = 4
 DEFAULT_CLASS_WEIGHTS = None
 DEFAULT_MASK_THRESHOLD = 0.5
 DEFAULT_PREDICT_SCALE = 0.5
-DEFAULT_SAVE_CHECKPOINT = False
+DEFAULT_SAVE_CHECKPOINT = True
 
 ## ARCADE dataset
 dir_train_imgs_src = r'./arcade/data/syntax/train/images/'
