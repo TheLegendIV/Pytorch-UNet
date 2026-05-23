@@ -114,6 +114,7 @@ def train_model(
             raise ValueError(f'Expected {model.n_classes} class weights, got {resolved_class_weights.numel()}')
         criterion = nn.CrossEntropyLoss(weight=resolved_class_weights)
     global_step = 0
+    best_val_score = 0.0
 
     # 5. Begin training
     for epoch in range(1, epochs + 1):
@@ -203,7 +204,16 @@ def train_model(
         with torch.enable_grad():
             scheduler.step()
         logging.info('Validation Dice score: {}'.format(val_score))
-        
+
+        # Always save the best model seen so far
+        if val_score > best_val_score:
+            best_val_score = val_score
+            Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
+            state_dict = model.state_dict()
+            state_dict['mask_values'] = dataset.mask_values
+            torch.save(state_dict, str(dir_checkpoint / 'best_model.pth'))
+            logging.info(f'Best model saved at epoch {epoch} (Dice: {best_val_score:.4f})')
+
         # Save a checkpoint per epoch for resuming or inference
         if save_checkpoint:
             Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
