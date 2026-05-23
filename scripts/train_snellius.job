@@ -1,0 +1,43 @@
+#!/bin/bash
+#SBATCH --job-name=unet_vessel
+#SBATCH --partition=gpu
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=18        # 18 cores per GPU slot on the gpu partition
+#SBATCH --gpus=1
+#SBATCH --mem=120G                # full memory allocation for gpu partition node
+#SBATCH --time=08:00:00           # adjust upward if training > 100 epochs on large dataset
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
+
+# ── Environment ──────────────────────────────────────────────────────────────
+module purge
+module load 2023
+module load CUDA/12.1.1
+module load Python/3.11.3-GCCcore-12.3.0
+
+# Activate your virtual environment (create once: python -m venv $HOME/unet-env)
+source $HOME/unet-env/bin/activate
+
+# ── Reproducibility ───────────────────────────────────────────────────────────
+export PYTHONHASHSEED=42
+
+# ── W&B (optional: disable if not configured on cluster) ─────────────────────
+# export WANDB_DISABLED=true       # uncomment to run without W&B
+export WANDB_MODE=offline          # safe default: logs locally, sync manually later
+
+# ── Move to repo root ─────────────────────────────────────────────────────────
+cd $SLURM_SUBMIT_DIR
+
+# ── Training ──────────────────────────────────────────────────────────────────
+echo "Starting training on $(hostname) with GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
+
+python train.py \
+    --epochs 100 \
+    --batch-size 16 \
+    --learning-rate 1e-4 \
+    --scale 0.5 \
+    --classes 4 \
+    --amp                          # AMP is strongly recommended on A100 — halves memory, ~2x faster
+
+echo "Training finished."
