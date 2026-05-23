@@ -97,7 +97,7 @@ def train_model(
     ''')
 
     # 4. Set up the optimizer, loss, LR scheduler, and AMP scaler
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     # Cosine anneal from lr down to lr/100 over all epochs
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=learning_rate / 100)
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
@@ -140,8 +140,8 @@ def train_model(
                             F.sigmoid(masks_pred.squeeze(1)), true_masks.float(), multiclass=False
                         )
                     else:
-                        # Multiclass: pure foreground Dice only — no CE background floor
-                        loss = dice_loss(
+                        # Multiclass: CE over all classes + Dice over foreground only
+                        loss = criterion(masks_pred, true_masks) + dice_loss(
                             F.softmax(masks_pred, dim=1).float()[:, 1:],
                             F.one_hot(true_masks, model.n_classes).permute(0, 3, 1, 2).float()[:, 1:],
                             multiclass=True
