@@ -45,6 +45,12 @@ def main() -> None:
     val_src = resolve_repo_path(h.dir_val_imgs_src)
     val_json = resolve_repo_path(h.dir_val_annotations)
 
+    # Add test set paths
+    test_src = resolve_repo_path('./arcade/data/syntax/test/images/')
+    test_json = resolve_repo_path('./arcade/data/syntax/test/annotations/test.json')
+    test_img = resolve_repo_path('./arcade/imgs/test/')
+    test_mask = resolve_repo_path('./arcade/masks/test/')
+
     train_img = resolve_repo_path(h.dir_img)
     val_img = resolve_repo_path(h.dir_val)
     train_mask = resolve_repo_path(h.dir_train_mask)
@@ -55,20 +61,25 @@ def main() -> None:
 
     clear_dir(train_mask)
     clear_dir(val_mask)
+    clear_dir(test_mask)
     clear_dir(train_img)
     clear_dir(val_img)
+    clear_dir(test_img)
     clear_dir(preview_color)
     clear_dir(preview_raw)
 
     copy_tree(train_src, train_img)
     copy_tree(val_src, val_img)
+    copy_tree(test_src, test_img)
 
     rgb2gs.convert_directory(train_img, train_img, recursive=True)
     rgb2gs.convert_directory(val_img, val_img, recursive=True)
+    rgb2gs.convert_directory(test_img, test_img, recursive=True)
 
     category_map = coco2png.parse_groups(groupings)
     coco2png.write_masks(train_json, train_img, train_mask, False, category_map)
     coco2png.write_masks(val_json, val_img, val_mask, False, category_map)
+    coco2png.write_masks(test_json, test_img, test_mask, False, category_map)
 
 
 
