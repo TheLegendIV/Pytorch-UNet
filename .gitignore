@@ -8,7 +8,7 @@ venv/
 wandb/
 *zip
 .venv/
-arcade/imgs/
-arcade/masks/
-arcade/preview/
+# arcade/imgs/
+# arcade/masks/
+# arcade/preview/
 
