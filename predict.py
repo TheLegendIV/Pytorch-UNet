@@ -71,7 +71,7 @@ def collect_input_files(args):
 
 def get_output_filenames(args, in_files):
     def _generate_name(fn):
-        return f'{os.path.splitext(fn)[0]}_OUT.png'
+        return f'{os.path.splitext(fn)[0]}.png'
 
     if not args.output:
         return list(map(_generate_name, in_files))
