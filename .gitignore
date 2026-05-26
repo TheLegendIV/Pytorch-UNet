@@ -11,4 +11,6 @@ wandb/
 arcade/imgs/
 arcade/masks/
 arcade/preview/
-
+arcade/analysis/test/*
+arcade/analysis/train/*
+arcade/analysis/val/*
