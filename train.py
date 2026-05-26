@@ -16,6 +16,12 @@ from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
 import wandb
+try:
+    from thop import profile as thop_profile
+    _THOP_AVAILABLE = True
+except ImportError:
+    _THOP_AVAILABLE = False
+
 from evaluate import evaluate
 from unet import UNet
 from utils.data_loading import BasicDataset
@@ -40,6 +46,29 @@ dir_val_mask = Path('./arcade/masks/val/')
 dir_checkpoint = Path('./checkpoints/')
 
 
+def log_model_stats(model: nn.Module, device: torch.device, dummy_hw: tuple = (512, 512)) -> dict:
+    """Print parameter count and GFLOPs; return as dict for W&B logging."""
+    n_params = sum(p.numel() for p in model.parameters())
+    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    gflops = None
+    gflops_str = 'N/A (install thop)'
+    if _THOP_AVAILABLE:
+        try:
+            dummy = torch.zeros(1, model.n_channels, *dummy_hw, device=device)
+            flops, _ = thop_profile(model, inputs=(dummy,), verbose=False)
+            gflops = flops / 1e9
+            gflops_str = f'{gflops:.3f}'
+        except Exception as exc:
+            gflops_str = f'N/A ({exc})'
+    logging.info(
+        f'Model statistics:\n'
+        f'\t  Total parameters : {n_params:,}\n'
+        f'\t  Trainable params  : {n_trainable:,}\n'
+        f'\t  GFLOPs ({dummy_hw[0]}\u00d7{dummy_hw[1]})    : {gflops_str}'
+    )
+    return {'n_params': n_params, 'n_params_trainable': n_trainable, 'gflops': gflops}
+
+
 def train_model(
         model,
         device,
@@ -53,6 +82,7 @@ def train_model(
         momentum: float = 0.999,
         gradient_clipping: float = 1.0,
         class_weights: Optional[Union[str, List[float]]] = None,
+        model_stats: Optional[dict] = None,
 ):
     # 1. Create dataset (fallback to BasicDataset if Carvana naming does not match)
     dataset = BasicDataset(dir_img, dir_train_mask, img_scale)
@@ -81,7 +111,8 @@ def train_model(
     experiment.config.update(
            dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate,
                save_checkpoint=save_checkpoint, img_scale=img_scale, amp=amp,
-               class_weights=class_weights)
+               class_weights=class_weights,
+               **(model_stats or {}))
     )
 
     logging.info(f'''Starting training:
@@ -320,6 +351,10 @@ if __name__ == '__main__':
         logging.info(f'Model loaded from {args.load}')
 
     model.to(device=device)
+
+    logging.info('--- Pre-training model stats ---')
+    stats = log_model_stats(model, device)
+
     try:
         train_model(
             model=model,
@@ -329,7 +364,8 @@ if __name__ == '__main__':
             device=device,
             img_scale=args.scale,
             amp=args.amp,
-            class_weights=args.class_weights
+            class_weights=args.class_weights,
+            model_stats=stats,
         )
     except torch.cuda.OutOfMemoryError:
         logging.error('Detected OutOfMemoryError! '
@@ -345,5 +381,9 @@ if __name__ == '__main__':
             device=device,
             img_scale=args.scale,
             amp=args.amp,
-            class_weights=args.class_weights
+            class_weights=args.class_weights,
+            model_stats=stats,
         )
+
+    logging.info('--- Post-training model stats ---')
+    log_model_stats(model, device)
