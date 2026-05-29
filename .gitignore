@@ -14,3 +14,4 @@ arcade/preview/
 arcade/analysis/test/*
 arcade/analysis/train/*
 arcade/analysis/val/*
+display

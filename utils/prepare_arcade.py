@@ -77,9 +77,9 @@ def main() -> None:
     rgb2gs.convert_directory(test_img, test_img, recursive=True)
 
     category_map = coco2png.parse_groups(groupings)
-    coco2png.write_masks(train_json, train_img, train_mask, False, category_map)
-    coco2png.write_masks(val_json, val_img, val_mask, False, category_map)
-    coco2png.write_masks(test_json, test_img, test_mask, False, category_map)
+    coco2png.write_masks(train_json, train_img, train_mask, False, True, category_map)
+    coco2png.write_masks(val_json, val_img, val_mask, False, True, category_map)
+    coco2png.write_masks(test_json, test_img, test_mask, False, True, category_map)
 
 
 
